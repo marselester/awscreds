@@ -17,9 +17,15 @@ import (
 	"github.com/go-kit/log"
 )
 
+// NewCreds allows to provide your own function to create Credentials needed in NewSwapper.
+type NewCreds func() (*credentials.Credentials, error)
+
 // New creates a new Credentials with a default credentials chain.
 // STS regional endpoint is used to improve latency,
 // see also https://github.com/aws/aws-sdk-go/issues/4385.
+//
+// You would probably want to supply your own version of this function to NewSwapper,
+// but at least it serves as an example.
 func New() (*credentials.Credentials, error) {
 	s, err := session.NewSession(&aws.Config{
 		STSRegionalEndpoint: endpoints.RegionalSTSEndpoint,
@@ -30,58 +36,39 @@ func New() (*credentials.Credentials, error) {
 	return s.Config.Credentials, nil
 }
 
-// Option sets up a Swapper.
-type Option func(*Swapper)
-
-// WithLogger sets a structured logger.
-func WithLogger(l log.Logger) Option {
-	return func(r *Swapper) {
-		r.logger = l
-	}
-}
-
-// WithCreds allows to provide your own function to create Credentials.
-func WithCreds(f func() (*credentials.Credentials, error)) Option {
-	return func(r *Swapper) {
-		r.newcreds = f
-	}
-}
-
-// WithPeriod sets up a period between credentials swaps.
-func WithPeriod(p time.Duration) Option {
-	return func(r *Swapper) {
-		r.period = p
-	}
-}
-
 // NewSwapper creates a new credentials swapper
 // and immediately tries to fetch credentials
 // to avoid an initialization penalty in client's API request.
 //
 // The default refresh period is 55 minutes in case a token expires every hour
 // see https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html.
-func NewSwapper(opts ...Option) (*Swapper, error) {
-	r := Swapper{
-		newcreds: New,
-		logger:   log.NewNopLogger(),
-		period:   55 * time.Minute,
-	}
-	for _, opt := range opts {
-		opt(&r)
+func NewSwapper(newcreds NewCreds, opts ...Option) (*Swapper, error) {
+	if newcreds == nil {
+		return nil, fmt.Errorf("newcreds cannot be nil")
 	}
 
-	if err := r.refresh(); err != nil {
+	s := Swapper{
+		conf: Config{
+			logger: log.NewNopLogger(),
+			period: 55 * time.Minute,
+		},
+		newcreds: newcreds,
+	}
+	for _, opt := range opts {
+		opt(&s.conf)
+	}
+
+	if err := s.refresh(); err != nil {
 		return nil, err
 	}
-	return &r, nil
+	return &s, nil
 }
 
 // Swapper allows to periodically swap AWS credentials with the new ones.
 type Swapper struct {
-	cache    atomic.Value
+	conf     Config
 	newcreds func() (*credentials.Credentials, error)
-	logger   log.Logger
-	period   time.Duration
+	cache    atomic.Value
 }
 
 // refresh refreshes cached credentials.
@@ -107,9 +94,9 @@ func (s *Swapper) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 
-		case <-time.After(s.period):
+		case <-time.After(s.conf.period):
 			if err := s.refresh(); err != nil {
-				s.logger.Log("msg", "failed to refresh aws credentials", "err", err)
+				s.conf.logger.Log("msg", "failed to refresh aws credentials", "err", err)
 			}
 		}
 	}
@@ -134,7 +121,7 @@ func (s *Swapper) Attach(c *client.Client, opts ...func(*v4.Signer)) bool {
 		if creds != nil && ok {
 			signer.Credentials = creds
 		} else {
-			s.logger.Log("msg", "failed to swap aws credentials")
+			s.conf.logger.Log("msg", "failed to swap aws credentials")
 		}
 	})
 

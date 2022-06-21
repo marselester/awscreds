@@ -44,6 +44,7 @@ func main() {
 	s3 := s3.New(sess)
 
 	s, err := awscreds.NewSwapper(
+		awscreds.New,
 		awscreds.WithLogger(logger),
 	)
 	if err != nil {
