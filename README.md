@@ -19,6 +19,10 @@ In short, there are three issues:
 
 This repository offers slightly refactored version of the code from the Rokt's post.
 
+<details>
+
+<summary>Swapper</summary>
+
 ```go
 package main
 
@@ -55,3 +59,47 @@ func main() {
 	s.Run(ctx)
 }
 ```
+
+</details>
+
+There is also an option to refresh existing credentials.
+
+<details>
+
+<summary>Refresher</summary>
+
+```go
+package main
+
+import (
+	"context"
+	"os"
+	"os/signal"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/go-kit/log"
+	"github.com/marselester/awscreds"
+)
+
+func main() {
+	logger := log.NewJSONLogger(log.NewSyncWriter(os.Stderr))
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	sess := session.Must(session.NewSession(&aws.Config{}))
+
+	r, err := awscreds.NewRefresher(
+		sess.Config.Credentials,
+		awscreds.WithLogger(logger),
+	)
+	if err != nil {
+		logger.Log("msg", "failed to get aws credentials", "err", err)
+		return
+	}
+	r.Run(ctx)
+}
+```
+
+</details>
